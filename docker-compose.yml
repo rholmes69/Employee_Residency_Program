@@ -1,0 +1,111 @@
+name: residency
+
+x-node-env: &node-env
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+  OLLAMA_URL: ${OLLAMA_URL_DOCKER:-http://host.docker.internal:11434}
+  SMTP_HOST: ${SMTP_HOST_DOCKER:-mailpit}
+  SMTP_PORT: ${SMTP_PORT_DOCKER:-1025}
+  MCP_URL: http://mcp:4100/mcp
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Catches outgoing email in development: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/node.Dockerfile
+      args:
+        APP: api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *node-env
+      AGENT_DIR: /app/agent
+    command: >
+      sh -c "npx prisma migrate deploy --schema packages/db/prisma/schema.prisma &&
+             npx tsx packages/db/prisma/seed.ts &&
+             node apps/api/dist/index.js"
+    ports:
+      - "4010:4010"
+    volumes:
+      # Edit the agent's SOUL/AGENT/MEMORY files live, no rebuild needed
+      - ./agent:/app/agent:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4010/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  mcp:
+    build:
+      context: .
+      dockerfile: docker/node.Dockerfile
+      args:
+        APP: mcp
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *node-env
+    command: node apps/mcp/dist/index.js
+    ports:
+      - "4100:4100"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+  # Optional: run Ollama in Docker instead of on the host.
+  #   docker compose --profile ollama up -d
+  #   set OLLAMA_URL_DOCKER=http://ollama:11434 in .env
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  pgdata:
+  ollama:

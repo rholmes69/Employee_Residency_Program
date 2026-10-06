@@ -1,0 +1,255 @@
+// Employee Residency Program — data model
+// Run `npm run db:migrate` after changing this file.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  EMPLOYEE
+  REVIEWER
+  ADMIN
+}
+
+enum ApplicationStatus {
+  DRAFT
+  PENDING_SUPERVISOR
+  SUPERVISOR_DECLINED
+  UNDER_REVIEW
+  ACCEPTED
+  WAITLISTED
+  NOT_SELECTED
+  WITHDRAWN
+}
+
+enum SupervisorDecision {
+  APPROVED
+  DECLINED
+}
+
+enum MatchStatus {
+  SUGGESTED
+  ASSIGNED
+  DISMISSED
+}
+
+enum MemoryScope {
+  GLOBAL
+  USER
+}
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String
+  entraOid    String?   @unique
+  role        Role      @default(EMPLOYEE)
+  jobTitle    String?
+  department  String?
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  applications  Application[]       @relation("Applicant")
+  reviews       Review[]
+  memories      AgentMemory[]
+  conversations AgentConversation[]
+  auditLogs     AuditLog[]
+}
+
+model ProgramCycle {
+  id             String   @id @default(cuid())
+  name           String
+  description    String?
+  opensAt        DateTime
+  deadline       DateTime
+  hrContactName  String
+  hrContactEmail String
+  isActive       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  applications Application[]
+}
+
+model Application {
+  id          String            @id @default(cuid())
+  cycleId     String
+  cycle       ProgramCycle      @relation(fields: [cycleId], references: [id])
+  applicantId String
+  applicant   User              @relation("Applicant", fields: [applicantId], references: [id])
+  status      ApplicationStatus @default(DRAFT)
+
+  // Employee Information
+  fullName           String @default("")
+  jobTitle           String @default("")
+  department         String @default("")
+  supervisorName     String @default("")
+  supervisorEmail    String @default("")
+  lengthOfEmployment String @default("")
+  email              String @default("")
+  phone              String @default("")
+
+  // Professional Growth & Interests
+  reasons              String[]
+  reasonOther          String?
+  hopeToGain           String   @default("")
+  interestAreas        String[]
+  interestOther        String?
+  goals                String   @default("")
+  strengths            String   @default("")
+  willingToParticipate Boolean?
+
+  // Employee Acknowledgment (typed e-signature)
+  acknowledged  Boolean   @default(false)
+  signatureName String?
+  signedAt      DateTime?
+
+  submittedAt  DateTime?
+  decidedAt    DateTime?
+  decisionNote String?
+
+  /// Embedding of goals + interests, used for mentor matching
+  embedding Float[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  supervisorReview SupervisorReview?
+  reviews          Review[]
+  aiAssessments    AiAssessment[]
+  mentorMatches    MentorMatch[]
+
+  @@unique([cycleId, applicantId])
+  @@index([status])
+  @@index([supervisorEmail])
+}
+
+model SupervisorReview {
+  id               String             @id @default(cuid())
+  applicationId    String             @unique
+  application      Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  supervisorEmail  String
+  supervisorUserId String?
+  decision         SupervisorDecision
+  comment          String?
+  decidedAt        DateTime           @default(now())
+}
+
+model Review {
+  id             String      @id @default(cuid())
+  applicationId  String
+  application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  reviewerId     String
+  reviewer       User        @relation(fields: [reviewerId], references: [id])
+  scores         Json
+  total          Int
+  recommendation String
+  notes          String?
+  createdAt      DateTime    @default(now())
+
+  @@index([applicationId])
+}
+
+/// AI-generated, advisory only. Never used to make decisions automatically.
+model AiAssessment {
+  id                 String      @id @default(cuid())
+  applicationId      String
+  application        Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  model              String
+  summary            String
+  scores             Json
+  total              Int
+  strengths          String[]
+  concerns           String[]
+  suggestedRotations String[]
+  createdAt          DateTime    @default(now())
+
+  @@index([applicationId])
+}
+
+model Mentor {
+  id             String        @id @default(cuid())
+  name           String
+  email          String        @unique
+  title          String        @default("")
+  department     String        @default("")
+  expertiseAreas String[]
+  bio            String        @default("")
+  capacity       Int           @default(2)
+  active         Boolean       @default(true)
+  embedding      Float[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  matches        MentorMatch[]
+}
+
+model MentorMatch {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  mentorId      String
+  mentor        Mentor      @relation(fields: [mentorId], references: [id], onDelete: Cascade)
+  score         Float
+  rationale     String
+  status        MatchStatus @default(SUGGESTED)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([applicationId, mentorId])
+}
+
+model AgentConversation {
+  id        String         @id @default(cuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  messages  AgentMessage[]
+
+  @@index([userId])
+}
+
+model AgentMessage {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   AgentConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  toolsUsed      String[]
+  createdAt      DateTime          @default(now())
+
+  @@index([conversationId])
+}
+
+/// Long-term agent memory. GLOBAL = shared facts (admin-curated); USER = per-person preferences.
+model AgentMemory {
+  id        String      @id @default(cuid())
+  scope     MemoryScope
+  userId    String?
+  user      User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime    @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+}

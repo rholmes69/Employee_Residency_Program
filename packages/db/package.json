@@ -1,0 +1,15 @@
+{
+  "name": "@erp/db",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@erp/shared": "*",
+    "@prisma/client": "^6.16.0"
+  }
+}
